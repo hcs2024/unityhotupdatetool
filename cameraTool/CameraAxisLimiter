@@ -1,0 +1,187 @@
+using UnityEngine;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using YezhStudio.Combat;
+
+    public class CameraAxisLimiter
+    {
+        public struct AABB
+        {
+            public Vector2 LowerBound;
+            public Vector2 UpperBound;
+
+            public void GetVertices(List<Vector2> output)
+            {
+                output.Clear();
+                output.Add(new Vector2(LowerBound.x, UpperBound.y));
+                output.Add(new Vector2(LowerBound.x, LowerBound.y));
+                output.Add(new Vector2(UpperBound.x, LowerBound.y));
+                output.Add(new Vector2(UpperBound.x, UpperBound.y));
+            }
+
+            public static bool TestOverlap(ref AABB a, ref AABB b)
+            {
+                Vector2 d1 = b.LowerBound - a.UpperBound;
+                Vector2 d2 = a.LowerBound - b.UpperBound;
+
+                if (d1.x > 0 || d1.y > 0)
+                    return false;
+
+                if (d2.x > 0 || d2.y > 0)
+                    return false;
+
+                return true;
+            }
+        }
+
+        public class Border
+        {
+            public enum LimiterType
+            {
+                X,
+                Y,
+            }
+
+            // 边界的顶点是按逆时针排序的，所以向里(p0, p1)的左侧是朝着地图里面的
+            public Vector2 p0;
+            public Vector2 p1;
+            public AABB aabb;
+
+            // 法线norm是朝着地图里面的
+            public Vector2 norm;
+            
+            public void SetNorm(Vector2 norm_)
+            {
+                norm = norm_;
+                float cos45d = 0.707f;
+                if (Vector2.Dot(norm, Vector2.up) >= cos45d)
+                {
+                    limiterType = LimiterType.Y;
+                }
+                else if (Vector2.Dot(norm, Vector2.down) >= cos45d)
+                {
+                    limiterType = LimiterType.Y;
+                }
+                else if (Vector2.Dot(norm, Vector2.left) >= cos45d)
+                {
+                    limiterType = LimiterType.X;
+                }
+                else
+                {
+                    limiterType = LimiterType.X;
+                }
+            }
+
+            public LimiterType limiterType;
+
+            /// <summary>
+            /// 点p到边界的最近距离。
+            /// </summary>
+            /// <param name="p">点p</param>
+            /// <param name="q">边界上的点q，|pq|是点p到边界的最近距离</param>
+            /// <returns></returns>
+            public float GetMinDistance(Vector2 p, out Vector2 q)
+            {
+                Vector2 paral = new Vector2(norm.y, -norm.x);
+
+                float nume = Vector2.Dot(paral, p - p0);
+                Vector2 r = p0 + paral * nume;
+
+                float d = Vector2.Dot(p1 - r, p0 - r);
+                if(d < 0.0f)
+                {
+                    // r 在边界上
+                    q = r;
+                    return Vector2.Distance(p, r); 
+                }
+                else
+                {
+                    float a = Vector2.Distance(p, p0);
+                    float b = Vector2.Distance(p, p1);
+                    if (a < b)
+                    {
+                        q = p0;
+                        return a;
+                    }
+                    else
+                    {
+                        q = p1;
+                        return b;
+                    }
+                }
+            }
+        }
+
+        private List<Border> _borders;
+
+        public CameraAxisLimiter(CameraBorderData data)
+        {
+            if (data == null || data.Points == null)
+                return;
+
+            SetBorders(data.Points);
+        }
+
+        public void SetBorders(List<Vector2Data> points)
+        {
+            _borders = new List<Border>();
+            int cnt = points.Count;
+            for(int i = 0; i < points.Count; i++)
+            {
+                int j = (i + 1) % cnt;
+                Border border = new Border();
+                border.p0 = new Vector2(float.Parse(points[i].x), float.Parse(points[i].y));
+                border.p1 = new Vector2(float.Parse(points[j].x), float.Parse(points[j].y));
+                var vec = border.p1 - border.p0;
+                Vector2 norm = new Vector2(-vec.y, vec.x);
+                norm = norm.normalized;
+                border.SetNorm(norm);
+                _borders.Add(border);
+            }
+        }
+
+        // 判断点是否在边界围成的封闭区域内（多边形, 不一定为凸多边形）
+        public bool IsPointInRegion(Vector2 point)
+        {
+            float t = 0.0f;
+            for(int i = 0; i < _borders.Count; i++)
+            {
+                var border = _borders[i];
+                Vector2 v1 = border.p0 - point;
+                Vector2 v2 = border.p1 - point;
+                float s = v1.x * v2.y - v1.y * v2.x;
+                t += s > 0.0f ? Vector2.Angle(v1, v2) : -Vector2.Angle(v1, v2);
+            }
+
+            return t > 1.0f;  // 在区域内时，理论的t等于2 * pi, 否则等于0
+        }
+
+        public Vector2 GetFixedPoint(Vector2 point)
+        {
+            if (_borders == null)
+                return point;
+
+            if(IsPointInRegion(point))
+            {
+                return point;
+            }
+            else
+            {
+                float minDist = -1.0f;
+                Vector2 res = point;
+                for(int i = 0; i < _borders.Count; i++)
+                {
+                    var border = _borders[i];
+                    Vector2 curQ;
+                    float curDist = border.GetMinDistance(point, out curQ);
+                    if(minDist < 0.0f || curDist < minDist)
+                    {
+                        minDist = curDist;
+                        res = curQ;
+                    }
+                }
+                return res;
+            }
+        }
+    }
